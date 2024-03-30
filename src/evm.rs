@@ -1,29 +1,34 @@
 use std::collections::HashMap;
 
-use ethers::abi::{Address, Hash, Uint};
-use ethers::core::types::Log;
-use ethers::types::transaction::eip2930::AccessList;
-use ethers::types::Bytes;
 use foundry_config::Chain;
-use foundry_evm::executor::{fork::CreateFork, Executor};
-use foundry_evm::executor::{opts::EvmOpts, Backend, ExecutorBuilder};
-use foundry_evm::trace::identifier::{EtherscanIdentifier, SignaturesIdentifier};
-use foundry_evm::trace::node::CallTraceNode;
-use foundry_evm::trace::{CallTraceArena, CallTraceDecoder, CallTraceDecoderBuilder};
-use foundry_evm::utils::{h160_to_b160, u256_to_ru256};
+use foundry_evm::backend::Backend;
+use foundry_evm::executors::Executor;
+use foundry_evm::executors::ExecutorBuilder;
+use foundry_evm::fork::CreateFork;
+use foundry_evm::opts::EvmOpts;
+
+use foundry_evm::traces::identifier::{EtherscanIdentifier, SignaturesIdentifier};
+use foundry_evm::traces::{
+    CallTraceArena, CallTraceDecoder, CallTraceDecoderBuilder, CallTraceNode,
+};
+
 use revm::db::DatabaseRef;
 use revm::interpreter::InstructionResult;
-use revm::primitives::{Account, Bytecode, Env, StorageSlot};
+use revm::primitives::Log;
+use revm::primitives::{Account, Address, Bytecode, Bytes, Env, StorageSlot, U256};
 use revm::DatabaseCommit;
+use revm_inspectors::tracing::TraceWriter;
 
 use crate::errors::{EvmError, OverrideError};
 use crate::simulation::CallTrace;
+
+pub type AccessList = Vec<(Address, Vec<U256>)>;
 
 #[derive(Debug, Clone)]
 pub struct CallRawRequest {
     pub from: Address,
     pub to: Address,
-    pub value: Option<Uint>,
+    pub value: Option<U256>,
     pub data: Option<Bytes>,
     pub access_list: Option<AccessList>,
     pub format_trace: bool,
@@ -54,7 +59,7 @@ impl From<CallTraceNode> for CallTrace {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StorageOverride {
-    pub slots: HashMap<Hash, Uint>,
+    pub slots: HashMap<U256, U256>,
     pub diff: bool,
 }
 
@@ -65,18 +70,17 @@ pub struct Evm {
 }
 
 impl Evm {
-    pub fn new(
+    pub async fn new(
         env: Option<Env>,
         fork_url: String,
         fork_block_number: Option<u64>,
-        gas_limit: u64,
-        tracing: bool,
+        gas_limit: U256,
         etherscan_key: Option<String>,
     ) -> Self {
         let evm_opts = EvmOpts {
             fork_url: Some(fork_url.clone()),
             fork_block_number,
-            env: foundry_evm::executor::opts::Env {
+            env: foundry_evm::opts::Env {
                 chain_id: None,
                 code_size_limit: None,
                 gas_price: Some(0),
@@ -90,54 +94,50 @@ impl Evm {
         let fork_opts = CreateFork {
             url: fork_url,
             enable_caching: true,
-            env: evm_opts.evm_env_blocking().unwrap(),
+            env: evm_opts.evm_env().await.unwrap(),
             evm_opts,
         };
 
         let db = Backend::spawn(Some(fork_opts.clone()));
 
-        let mut builder = ExecutorBuilder::default()
-            .with_gas_limit(gas_limit.into())
-            .set_tracing(tracing);
+        let builder = ExecutorBuilder::default().gas_limit(gas_limit);
+        // .set_tracing(tracing);
 
-        if let Some(env) = env {
-            builder = builder.with_config(env);
-        } else {
-            builder = builder.with_config(fork_opts.env.clone());
-        }
-
-        let executor = builder.build(db);
+        let executor = builder.build(env.unwrap_or(fork_opts.env.clone()), db);
 
         let foundry_config = foundry_config::Config {
             etherscan_api_key: etherscan_key,
             ..Default::default()
         };
 
-        let chain: Chain = fork_opts.env.cfg.chain_id.to::<u64>().into();
-        let etherscan_identifier = EtherscanIdentifier::new(&foundry_config, Some(chain)).ok();
-        let mut decoder = CallTraceDecoderBuilder::new().with_verbosity(5).build();
+        let chain: Chain = fork_opts.env.cfg.chain_id.into();
+        let etherscan_identifier =
+            EtherscanIdentifier::new(&foundry_config, Some(chain)).unwrap_or_default();
+        let decoder = CallTraceDecoderBuilder::new().with_verbosity(5);
 
-        if let Ok(identifier) =
+        let decoder = if let Ok(identifier) =
             SignaturesIdentifier::new(foundry_config::Config::foundry_cache_dir(), false)
         {
-            decoder.add_signature_identifier(identifier);
-        }
+            decoder.with_signature_identifier(identifier)
+        } else {
+            decoder
+        };
 
         Evm {
             executor,
-            decoder,
+            decoder: decoder.build(),
             etherscan_identifier,
         }
     }
 
     pub async fn call_raw(&mut self, call: CallRawRequest) -> Result<CallRawResult, EvmError> {
-        self.set_access_list(call.access_list);
-        let res = self
+        self.set_access_list(call.access_list)?;
+        let mut res = self
             .executor
             .call_raw(
                 call.from,
                 call.to,
-                call.data.unwrap_or_default().0,
+                call.data.unwrap_or_default(),
                 call.value.unwrap_or_default(),
             )
             .map_err(|err| {
@@ -146,15 +146,19 @@ impl Evm {
             })?;
 
         let formatted_trace = if call.format_trace {
-            let mut output = String::new();
-            for trace in &mut res.traces.clone() {
+            let mut trace_writer = TraceWriter::new(Vec::<u8>::new());
+            for trace in &mut res.traces {
                 if let Some(identifier) = &mut self.etherscan_identifier {
                     self.decoder.identify(trace, identifier);
                 }
-                self.decoder.decode(trace).await;
-                output.push_str(format!("{trace}").as_str());
+                trace_writer
+                    .write_arena(trace)
+                    .expect("trace writer failure");
             }
-            Some(output)
+            Some(
+                String::from_utf8(trace_writer.into_writer())
+                    .expect("trace writer wrote invalid UTF-8"),
+            )
         } else {
             None
         };
@@ -166,7 +170,7 @@ impl Evm {
             trace: res.traces,
             logs: res.logs,
             exit_reason: res.exit_reason,
-            return_data: Bytes(res.result),
+            return_data: res.result,
             formatted_trace,
         })
     }
@@ -174,24 +178,24 @@ impl Evm {
     pub fn override_account(
         &mut self,
         address: Address,
-        balance: Option<Uint>,
+        balance: Option<U256>,
         nonce: Option<u64>,
         code: Option<Bytes>,
         storage: Option<StorageOverride>,
     ) -> Result<(), OverrideError> {
-        let address = h160_to_b160(address);
+        // let address = h160_to_b160(address);
         let mut account = Account {
             info: self
                 .executor
-                .backend()
-                .basic(address)
+                .backend
+                .basic_ref(address)
                 .map_err(|_| OverrideError)?
                 .unwrap_or_default(),
             ..Account::new_not_existing()
         };
 
         if let Some(balance) = balance {
-            account.info.balance = u256_to_ru256(balance);
+            account.info.balance = balance;
         }
         if let Some(nonce) = nonce {
             account.info.nonce = nonce;
@@ -203,19 +207,19 @@ impl Evm {
             // If we do a "full storage override", make sure to set this flag so
             // that existing storage slots are cleared, and unknown ones aren't
             // fetched from the forked node.
-            account.storage_cleared = !storage.diff;
-            account
-                .storage
-                .extend(storage.slots.into_iter().map(|(key, value)| {
-                    (
-                        u256_to_ru256(Uint::from_big_endian(key.as_bytes())),
-                        StorageSlot::new(u256_to_ru256(value)),
-                    )
-                }));
+            if storage.diff {
+                account.storage.clear();
+            }
+            account.storage.extend(
+                storage
+                    .slots
+                    .into_iter()
+                    .map(|(key, value)| (key, StorageSlot::new(value))),
+            );
         }
 
         self.executor
-            .backend_mut()
+            .backend
             .commit([(address, account)].into_iter().collect());
 
         Ok(())
@@ -224,16 +228,16 @@ impl Evm {
     pub async fn call_raw_committing(
         &mut self,
         call: CallRawRequest,
-        gas_limit: u64,
+        gas_limit: U256,
     ) -> Result<CallRawResult, EvmError> {
         self.executor.set_gas_limit(gas_limit.into());
-        self.set_access_list(call.access_list);
-        let res = self
+        self.set_access_list(call.access_list)?;
+        let mut res = self
             .executor
             .call_raw_committing(
                 call.from,
                 call.to,
-                call.data.unwrap_or_default().0,
+                call.data.unwrap_or_default(),
                 call.value.unwrap_or_default(),
             )
             .map_err(|err| {
@@ -242,15 +246,19 @@ impl Evm {
             })?;
 
         let formatted_trace = if call.format_trace {
-            let mut output = String::new();
-            for trace in &mut res.traces.clone() {
+            let mut trace_writer = TraceWriter::new(Vec::<u8>::new());
+            for trace in &mut res.traces {
                 if let Some(identifier) = &mut self.etherscan_identifier {
                     self.decoder.identify(trace, identifier);
                 }
-                self.decoder.decode(trace).await;
-                output.push_str(format!("{trace}").as_str());
+                trace_writer
+                    .write_arena(trace)
+                    .expect("trace writer failure");
             }
-            Some(output)
+            Some(
+                String::from_utf8(trace_writer.into_writer())
+                    .expect("trace writer wrote invalid UTF-8"),
+            )
         } else {
             None
         };
@@ -262,47 +270,38 @@ impl Evm {
             trace: res.traces,
             logs: res.logs,
             exit_reason: res.exit_reason,
-            return_data: Bytes(res.result),
+            return_data: res.result,
             formatted_trace,
         })
     }
 
-    pub async fn set_block(&mut self, number: u64) -> Result<(), EvmError> {
-        self.executor.env_mut().block.number = Uint::from(number).into();
+    pub async fn set_block(&mut self, number: U256) -> Result<(), EvmError> {
+        self.executor.env.block.number = number;
         Ok(())
     }
 
-    pub fn get_block(&self) -> Uint {
-        self.executor.env().block.number.into()
+    pub fn get_block(&self) -> U256 {
+        self.executor.env.block.number
     }
 
-    pub async fn set_block_timestamp(&mut self, timestamp: u64) -> Result<(), EvmError> {
-        self.executor.env_mut().block.timestamp = Uint::from(timestamp).into();
+    pub async fn set_block_timestamp(&mut self, timestamp: U256) -> Result<(), EvmError> {
+        self.executor.env.block.timestamp = timestamp;
         Ok(())
     }
 
-    pub fn get_block_timestamp(&self) -> Uint {
-        self.executor.env().block.timestamp.into()
+    pub fn get_block_timestamp(&self) -> U256 {
+        self.executor.env.block.timestamp
     }
 
-    pub fn get_chain_id(&self) -> Uint {
-        self.executor.env().cfg.chain_id.into()
+    pub fn get_chain_id(&self) -> u64 {
+        self.executor.env.cfg.chain_id
     }
 
-    fn set_access_list(&mut self, access_list: Option<AccessList>) {
-        self.executor.env_mut().tx.access_list = access_list
-            .unwrap_or_default()
-            .0
-            .into_iter()
-            .map(|item| {
-                (
-                    h160_to_b160(item.address),
-                    item.storage_keys
-                        .into_iter()
-                        .map(|key| u256_to_ru256(Uint::from_big_endian(key.as_bytes())))
-                        .collect(),
-                )
-            })
-            .collect();
+    fn set_access_list(&mut self, access_list: Option<AccessList>) -> Result<(), EvmError> {
+        if let Some(access_list) = access_list {
+            self.executor.env.tx.access_list = access_list;
+        }
+
+        Ok(())
     }
 }
