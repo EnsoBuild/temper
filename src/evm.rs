@@ -5,6 +5,7 @@ use ethers::core::types::Log;
 use ethers::types::transaction::eip2930::AccessList;
 use ethers::types::Bytes;
 use foundry_config::Chain;
+use foundry_evm::executor::backend::DatabaseExt;
 use foundry_evm::executor::{fork::CreateFork, Executor};
 use foundry_evm::executor::{opts::EvmOpts, Backend, ExecutorBuilder};
 use foundry_evm::trace::identifier::{EtherscanIdentifier, SignaturesIdentifier};
@@ -289,6 +290,10 @@ impl Evm {
         self.executor.env().cfg.chain_id.into()
     }
 
+    pub fn get_fork_url(&self) -> Option<String> {
+        self.executor.backend().active_fork_url()
+    }
+    
     fn set_access_list(&mut self, access_list: Option<AccessList>) {
         self.executor.env_mut().tx.access_list = access_list
             .unwrap_or_default()
