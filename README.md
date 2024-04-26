@@ -42,7 +42,7 @@ Example response:
 ```
 
 Notes:
-
+- `chainId` must be the same as the `chainId` of the `FORK_URL` environment variable, if defined. 
 - `blockNumber` can be omitted and the latest block will be used, however providing a `blockNumber` is recommended where possible to use the cache.
 
 ### POST /api/v1/simulate-bundle
@@ -82,7 +82,7 @@ Example response:
 
 Notes:
 
-- `chainId` must be the same in all transactions.
+- `chainId` must be the same in all transactions and it must match the `chainId` of `FORK_URL` environment variable, if defined. 
 - `blockNumber` can be included and incremented when a multi-block simulation is required, or omitted in all transactions to use latest.
 
 ### POST /api/v1/simulate-stateful
@@ -148,7 +148,7 @@ Example response:
 ```
 Notes:
 
-- `chainId` must be the same in all transactions.
+- `chainId` must be the same in all transactions and it must match the `chainId` of `FORK_URL` environment variable, if defined.
 - `blockNumber` can be included and incremented when a multi-block simulation is required, or omitted in all transactions to use latest.
 
 
