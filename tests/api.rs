@@ -11,7 +11,7 @@ use enso_temper::{
     },
     SharedSimulationState,
 };
-use ethers::types::U256;
+use foundry_evm::revm::primitives::U256;
 use warp::Filter;
 
 fn filter(
@@ -237,9 +237,9 @@ async fn post_simulate_state_overrides() {
     assert_eq!(res.status(), 200);
 
     let body: SimulationResponse = serde_json::from_slice(res.body()).unwrap();
-    let result = U256::from_big_endian(&body.return_data);
+    let result = U256::from_be_bytes(body.return_data.as_ref());
 
-    assert_eq!(result.as_u128(), 123456789012345678901234567890);
+    assert_eq!(result.to::<u128>(), 123456789012345678901234567890);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -573,11 +573,11 @@ async fn post_simulate_bundle_multiple_block_numbers() {
     assert_eq!(body[3].block_number, 16968598);
 
     assert_eq!(
-        U256::from(body[2].return_data.0.to_vec().as_slice()),
+        U256::from_be_bytes(body[2].return_data),
         U256::from(1680526127)
     );
     assert_eq!(
-        U256::from(body[3].return_data.0.to_vec().as_slice()),
+        U256::from_be_bytes(body[3].return_data),
         U256::from(1680526127 + 12)
     );
 }
@@ -726,11 +726,11 @@ async fn post_simulate_stateful() {
     assert_eq!(body[1].block_number, 16968598);
 
     assert_eq!(
-        U256::from(body[0].return_data.0.to_vec().as_slice()),
+        U256::from_be_bytes(body[0].return_data),
         U256::from(1680526127)
     );
     assert_eq!(
-        U256::from(body[1].return_data.0.to_vec().as_slice()),
+        U256::from_be_bytes(body[1].return_data),
         U256::from(1680526127 + 12)
     );
 
