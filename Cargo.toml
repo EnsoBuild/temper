@@ -1,6 +1,6 @@
 [package]
 name = "enso-temper"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Enso Finance"]
 license = "MIT"
@@ -8,20 +8,28 @@ description = "Temper is an Ethereum Transaction Simulator"
 homepage = "https://github.com/EnsoFinance/temper"
 repository = "https://github.com/EnsoFinance/temper"
 
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[profile.performance]
+inherits = "release"
+incremental = false
+codegen-units = 1
+opt-level = 3
+lto = "fat"
+
 [dependencies]
 # http
 warp = "0.3"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1.35.1", features = ["full"] }
 
 # serialization
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { version = "1.0.197", features = ["derive"] }
+serde_json = "1.0.115"
 
 # bytes
-bytes = "1.2.1"
+bytes = { version = "1.6.0", features = ["serde"] }
 
 # ethereum, evm
-revm = { version = "3", default-features = false, features = [
+revm = { version = "9.0.0", default-features = false, features = [
   "std",
   "serde",
   "memory_limit",
@@ -29,18 +37,18 @@ revm = { version = "3", default-features = false, features = [
   "optional_block_gas_limit",
   "optional_no_base_fee"
 ] }
-ethers = { git = "https://github.com/gakonst/ethers-rs" }
-foundry-config = { git = "https://github.com/foundry-rs/foundry", rev = "12ea9f6" }
-foundry-evm = { git = "https://github.com/foundry-rs/foundry", rev = "12ea9f6" }
+foundry-evm = { git = "https://github.com/foundry-rs/foundry" }
+foundry-evm-traces = { git = "https://github.com/foundry-rs/foundry" }
+foundry-config = { git = "https://github.com/foundry-rs/foundry" }
+alloy = { git = "https://github.com/alloy-rs/alloy", features = ["eips", "serde"]}
 
 # env, logs, errors, uuid
-dotenvy = "0.15"
-log = "0.4"
+dotenvy = "0.15.7"
+log = "0.4.21"
 pretty_env_logger = "0.4"
-eyre = "0.6"
-dashmap = "5.4.0"
+eyre = "0.6.3"
+dashmap = "5.5.3"
 uuid = { version = "1.3.4", features = ["v4", "fast-rng", "serde"] }
 
 [dev-dependencies]
 temp-env = { version = "0.3.4", features = ["async_closure"] }
-
