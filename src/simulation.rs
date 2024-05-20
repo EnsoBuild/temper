@@ -1,14 +1,11 @@
 use std::collections::HashMap;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use dashmap::mapref::one::RefMut;
-use ethers::abi::{Address, Hash, Uint};
-use ethers::core::types::Log;
-use ethers::types::transaction::eip2930::AccessList;
-use ethers::types::Bytes;
-use foundry_evm::CallKind;
-use revm::interpreter::InstructionResult;
+use alloy::eips::eip2930::AccessList;
+use foundry_evm::revm::primitives::{Bytes, U256, B256, Address, Log};
+use foundry_evm::revm::interpreter::InstructionResult;
+use foundry_evm_traces::CallKind;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -33,7 +30,7 @@ pub struct SimulationRequest {
     pub to: Address,
     pub data: Option<Bytes>,
     pub gas_limit: u64,
-    pub value: Option<PermissiveUint>,
+    pub value: Option<U256>,
     pub access_list: Option<AccessList>,
     pub block_number: Option<u64>,
     pub block_timestamp: Option<u64>,
@@ -77,7 +74,7 @@ pub struct StatefulSimulationEndResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StateOverride {
-    pub balance: Option<PermissiveUint>,
+    pub balance: Option<U256>,
     pub nonce: Option<u64>,
     pub code: Option<Bytes>,
     #[serde(flatten)]
@@ -88,11 +85,11 @@ pub struct StateOverride {
 #[serde(untagged)]
 pub enum State {
     Full {
-        state: HashMap<Hash, PermissiveUint>,
+        state: HashMap<B256, U256>,
     },
     #[serde(rename_all = "camelCase")]
     Diff {
-        state_diff: HashMap<Hash, PermissiveUint>,
+        state_diff: HashMap<B256, U256>,
     },
 }
 
@@ -106,7 +103,6 @@ impl From<State> for StorageOverride {
         StorageOverride {
             slots: slots
                 .into_iter()
-                .map(|(key, value)| (key, value.into()))
                 .collect(),
             diff,
         }
@@ -119,33 +115,7 @@ pub struct CallTrace {
     pub call_type: CallKind,
     pub from: Address,
     pub to: Address,
-    pub value: Uint,
-}
-
-#[derive(Debug, Default, Clone, Copy, Serialize, PartialEq)]
-#[serde(transparent)]
-pub struct PermissiveUint(pub Uint);
-
-impl From<PermissiveUint> for Uint {
-    fn from(value: PermissiveUint) -> Self {
-        value.0
-    }
-}
-
-impl<'de> Deserialize<'de> for PermissiveUint {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        // Accept value in hex or decimal formats
-        let value = String::deserialize(deserializer)?;
-        let parsed = if value.starts_with("0x") {
-            Uint::from_str(&value).map_err(serde::de::Error::custom)?
-        } else {
-            Uint::from_dec_str(&value).map_err(serde::de::Error::custom)?
-        };
-        Ok(Self(parsed))
-    }
+    pub value: U256,
 }
 
 fn chain_id_to_fork_url(chain_id: u64) -> Result<String, Rejection> {
@@ -186,7 +156,7 @@ async fn run(
     for (address, state_override) in transaction.state_overrides.into_iter().flatten() {
         evm.override_account(
             address,
-            state_override.balance.map(Uint::from),
+            state_override.balance.map(|v| U256::from(v)),
             state_override.nonce,
             state_override.code,
             state_override.state.map(StorageOverride::from),
@@ -196,7 +166,7 @@ async fn run(
     let call = CallRawRequest {
         from: transaction.from,
         to: transaction.to,
-        value: transaction.value.map(Uint::from),
+        value: transaction.value.map(|v| U256::from(v)),
         data: transaction.data,
         access_list: transaction.access_list,
         format_trace: transaction.format_trace.unwrap_or_default(),
@@ -215,7 +185,7 @@ async fn run(
         trace: result
             .trace
             .unwrap_or_default()
-            .arena
+            .into_nodes()
             .into_iter()
             .map(CallTrace::from)
             .collect(),
@@ -227,9 +197,11 @@ async fn run(
 }
 
 pub async fn simulate(transaction: SimulationRequest, config: Config) -> Result<Json, Rejection> {
-    let fork_url = config
-        .fork_url
-        .unwrap_or(chain_id_to_fork_url(transaction.chain_id)?);
+    let fork_url = if let Some(url) = config.fork_url {
+        url
+    } else {
+        chain_id_to_fork_url(transaction.chain_id)?
+    };
     let mut evm = Evm::new(
         None,
         fork_url,
@@ -237,9 +209,9 @@ pub async fn simulate(transaction: SimulationRequest, config: Config) -> Result<
         transaction.gas_limit,
         true,
         config.etherscan_key,
-    );
+    ).await;
 
-    if evm.get_chain_id() != Uint::from(transaction.chain_id) {
+    if evm.get_chain_id() != U256::from(transaction.chain_id) {
         return Err(warp::reject::custom(IncorrectChainIdError()));
     }
 
@@ -262,9 +234,11 @@ pub async fn simulate_bundle(
     let first_block_number = transactions[0].block_number;
     let first_block_timestamp = transactions[0].block_timestamp;
 
-    let fork_url = config
-        .fork_url
-        .unwrap_or(chain_id_to_fork_url(first_chain_id)?);
+    let fork_url = if let Some(url) = config.fork_url {
+        url
+    } else {
+        chain_id_to_fork_url(first_chain_id)?
+    };
     let mut evm = Evm::new(
         None,
         fork_url,
@@ -272,9 +246,9 @@ pub async fn simulate_bundle(
         transactions[0].gas_limit,
         true,
         config.etherscan_key,
-    );
+    ).await;
 
-    if evm.get_chain_id() != Uint::from(first_chain_id) {
+    if evm.get_chain_id() != U256::from(first_chain_id) {
         return Err(warp::reject::custom(IncorrectChainIdError()));
     }
 
@@ -293,14 +267,14 @@ pub async fn simulate_bundle(
             let tx_block = transaction
                 .block_number
                 .expect("Transaction has no block number");
-            if transaction.block_number < first_block_number || tx_block < evm.get_block().as_u64()
+            if transaction.block_number < first_block_number || tx_block < evm.get_block().to::<u64>()
             {
                 return Err(warp::reject::custom(InvalidBlockNumbersError()));
             }
             evm.set_block(tx_block)
                 .await
                 .expect("Failed to set block number");
-            evm.set_block_timestamp(evm.get_block_timestamp().as_u64() + 12)
+            evm.set_block_timestamp(evm.get_block_timestamp().to::<u64>() + 12)
                 .await
                 .expect("Failed to set block timestamp");
         }
@@ -315,9 +289,11 @@ pub async fn simulate_stateful_new(
     config: Config,
     state: Arc<SharedSimulationState>,
 ) -> Result<Json, Rejection> {
-    let fork_url = config
-        .fork_url
-        .unwrap_or(chain_id_to_fork_url(stateful_simulation_request.chain_id)?);
+    let fork_url = if let Some(url) = config.fork_url {
+        url
+    } else {
+        chain_id_to_fork_url(stateful_simulation_request.chain_id)?
+    };
     let mut evm = Evm::new(
         None,
         fork_url,
@@ -325,7 +301,7 @@ pub async fn simulate_stateful_new(
         stateful_simulation_request.gas_limit,
         true,
         config.etherscan_key,
-    );
+    ).await;
 
     if let Some(timestamp) = stateful_simulation_request.block_timestamp {
         evm.set_block_timestamp(timestamp).await?;
@@ -374,7 +350,7 @@ pub async fn simulate_stateful(
     let evm = evm_ref_mut.value();
     let mut evm = evm.lock().await;
 
-    if evm.get_chain_id() != Uint::from(first_chain_id) {
+    if evm.get_chain_id() != U256::from(first_chain_id) {
         return Err(warp::reject::custom(IncorrectChainIdError()));
     }
 
@@ -383,19 +359,19 @@ pub async fn simulate_stateful(
             return Err(warp::reject::custom(MultipleChainIdsError()));
         }
         if transaction.block_number != first_block_number
-            || transaction.block_number.unwrap() != evm.get_block().as_u64()
+            || transaction.block_number.unwrap() != evm.get_block().to::<u64>()
         {
             let tx_block = transaction
                 .block_number
                 .expect("Transaction has no block number");
-            if transaction.block_number < first_block_number || tx_block < evm.get_block().as_u64()
+            if transaction.block_number < first_block_number || tx_block < evm.get_block().to::<u64>()
             {
                 return Err(warp::reject::custom(InvalidBlockNumbersError()));
             }
             evm.set_block(tx_block)
                 .await
                 .expect("Failed to set block number");
-            let block_timestamp = evm.get_block_timestamp().as_u64();
+            let block_timestamp = evm.get_block_timestamp().to::<u64>();
             evm.set_block_timestamp(block_timestamp + 12)
                 .await
                 .expect("Failed to set block timestamp");
