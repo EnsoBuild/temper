@@ -1,0 +1,11 @@
+# Git
+.git
+
+# Environment
+.env*
+
+# Build
+target
+
+# IDE
+.idea
