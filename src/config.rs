@@ -1,4 +1,5 @@
 use dotenvy::dotenv;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -7,6 +8,7 @@ pub struct Config {
     pub etherscan_key: Option<String>,
     pub api_key: Option<String>,
     pub max_request_size: u64,
+    pub rpc_urls: HashMap<u64, String>,
 }
 
 pub fn config() -> Config {
@@ -31,12 +33,24 @@ fn load_config() -> Config {
         .expect("MAX_REQUEST_SIZE must be a valid u64")
         * 1024;
 
+    let mut rpc_urls = HashMap::new();
+    for (key, value) in std::env::vars() {
+        if let Some(chain_id) = key.strip_prefix("RPC_URL_") {
+            if let Ok(chain_id) = chain_id.parse::<u64>() {
+                if !value.is_empty() {
+                    rpc_urls.insert(chain_id, value);
+                }
+            }
+        }
+    }
+
     Config {
         fork_url,
         port,
         etherscan_key,
         api_key,
         max_request_size,
+        rpc_urls,
     }
 }
 

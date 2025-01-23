@@ -148,32 +148,47 @@ impl<'de> Deserialize<'de> for PermissiveUint {
     }
 }
 
-fn chain_id_to_fork_url(chain_id: u64) -> Result<String, Rejection> {
+fn chain_id_to_fork_url(chain_id: u64, config: &Config) -> Result<String, Rejection> {
+    if let Some(custom_url) = config.rpc_urls.get(&chain_id) {
+      return Ok(custom_url.clone());
+    }
+
     match chain_id {
         // ethereum
-        1 => Ok("https://eth.llamarpc.com".to_string()),
+        1 => Ok("https://eth.drpc.org".to_string()),
         5 => Ok("https://eth-goerli.g.alchemy.com/v2/demo".to_string()),
-        11155111 => Ok("https://eth-sepolia.g.alchemy.com/v2/demo".to_string()),
+        17000 => Ok("https://holesky.drpc.org".to_string()),
+        11155111 => Ok("https://sepolia.drpc.org".to_string()),
         // polygon
-        137 => Ok("https://polygon-mainnet.g.alchemy.com/v2/demo".to_string()),
+        137 => Ok("https://polygon.drpc.org".to_string()),
         80001 => Ok("https://polygon-mumbai.g.alchemy.com/v2/demo".to_string()),
+        80002 => Ok("https://polygon-amoy.drpc.org".to_string()),
         // avalanche
-        43114 => Ok("https://api.avax.network/ext/bc/C/rpc".to_string()),
-        43113 => Ok("https://api.avax-test.network/ext/bc/C/rpc".to_string()),
+        43114 => Ok("https://avalanche.drpc.org".to_string()),
+        43113 => Ok("https://avalanche-fuji.drpc.org".to_string()),
         // fantom
-        250 => Ok("https://rpcapi.fantom.network/".to_string()),
-        4002 => Ok("https://rpc.testnet.fantom.network/".to_string()),
+        250 => Ok("https://fantom.drpc.org".to_string()),
+        4002 => Ok("https://fantom-testnet.drpc.org".to_string()),
         // xdai
-        100 => Ok("https://rpc.xdaichain.com/".to_string()),
+        100 => Ok("https://gnosis.drpc.org".to_string()),
+        10200 => Ok("https://gnosis-chiado.drpc.org".to_string()),
         // bsc
-        56 => Ok("https://bsc-dataseed.binance.org/".to_string()),
-        97 => Ok("https://data-seed-prebsc-1-s1.binance.org:8545/".to_string()),
+        56 => Ok("https://bsc.drpc.org".to_string()),
+        97 => Ok("https://bsc-testnet.drpc.org".to_string()),
         // arbitrum
-        42161 => Ok("https://arb1.arbitrum.io/rpc".to_string()),
+        42161 => Ok("https://arbitrum.drpc.org".to_string()),
         421613 => Ok("https://goerli-rollup.arbitrum.io/rpc".to_string()),
+        421614 => Ok("https://arbitrum-sepolia.drpc.org".to_string()),
         // optimism
-        10 => Ok("https://mainnet.optimism.io/".to_string()),
+        10 => Ok("https://optimism.drpc.org".to_string()),
         420 => Ok("https://goerli.optimism.io/".to_string()),
+        11155420 => Ok("https://optimism-sepolia.drpc.org".to_string()),
+        // base
+        8453 => Ok("https://base.drpc.org".to_string()),
+        84532 => Ok("https://base-sepolia.drpc.org".to_string()),
+        // zksync
+        324 => Ok("https://zksync.drpc.org".to_string()),
+        300 => Ok("https://zksync-sepolia.drpc.org".to_string()),
         _ => Err(NoURLForChainIdError.into()),
     }
 }
@@ -229,7 +244,8 @@ async fn run(
 pub async fn simulate(transaction: SimulationRequest, config: Config) -> Result<Json, Rejection> {
     let fork_url = config
         .fork_url
-        .unwrap_or(chain_id_to_fork_url(transaction.chain_id)?);
+        .clone()
+        .unwrap_or(chain_id_to_fork_url(transaction.chain_id, &config)?);
     let mut evm = Evm::new(
         None,
         fork_url,
@@ -264,7 +280,8 @@ pub async fn simulate_bundle(
 
     let fork_url = config
         .fork_url
-        .unwrap_or(chain_id_to_fork_url(first_chain_id)?);
+        .clone()
+        .unwrap_or(chain_id_to_fork_url(first_chain_id, &config)?);
     let mut evm = Evm::new(
         None,
         fork_url,
@@ -317,7 +334,8 @@ pub async fn simulate_stateful_new(
 ) -> Result<Json, Rejection> {
     let fork_url = config
         .fork_url
-        .unwrap_or(chain_id_to_fork_url(stateful_simulation_request.chain_id)?);
+        .clone()
+        .unwrap_or(chain_id_to_fork_url(stateful_simulation_request.chain_id, &config)?);
     let mut evm = Evm::new(
         None,
         fork_url,
