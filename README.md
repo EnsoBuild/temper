@@ -83,11 +83,11 @@ Example response:
 Notes:
 
 - `chainId` must be the same in all transactions.
-- `blockNumber` can be included and incremented when a multi-block simulation is required, or omitted in all transactions to use latest.
+- `blockNumber` can be included and incremented when a multi-block simulation is required, or omitted in all transactions to use the latest.
 
 ### POST /api/v1/simulate-stateful
 
-Starts a new stateful simulation, allowing you to persist the state of a single EVM across multiple subsequent simulation requests.
+It starts a new stateful simulation, allowing you to persist the state of a single EVM across multiple subsequent simulation requests.
 
 [See the full request and response types below.](#types)
 
@@ -149,7 +149,7 @@ Example response:
 Notes:
 
 - `chainId` must be the same in all transactions.
-- `blockNumber` can be included and incremented when a multi-block simulation is required, or omitted in all transactions to use latest.
+- `blockNumber` can be included and incremented when a multi-block simulation is required, or omitted in all transactions to use the latest.
 
 
 ### DELETE /api/v1/simulate-stateful/{statefulSimulationId}
@@ -170,7 +170,7 @@ Example response:
 
 ### Authentication
 
-If you set an `API_KEY` environment variable then all calls to the API must be accompanied by a `X-API-KEY` header which contains this API Key.
+If you set an `API_KEY` environment variable, then all calls to the API must be accompanied by a `X-API-KEY` header which contains this API Key.
 
 ## 🏃‍♂️ Running 🏃‍♂️
 
